@@ -66,23 +66,35 @@ cd trailerfin
 ```
 
 ### 2. Configure Environment Variables
-Create a `.env` file in the project root with the following variables:
+Copy the example environment file and configure it:
+
+```sh
+cp .env.example .env
+```
+
+Edit the `.env` file with your settings:
 
 ```env
 SCAN_PATH=/path/to/your/media
 VIDEO_FILENAME=trailer.strm
 WORKERS=4
 VIDEO_START_TIME=10
+SCHEDULE_DAYS=7
 TMDB_API_KEY=your_tmdb_api_key_here
 TRAILER_LANGUAGE=en
 ```
 
+**Environment Variables:**
+
 - `SCAN_PATH`: Directory to scan for IMDb IDs (can be overridden with `--dir` CLI option)
-- `VIDEO_FILENAME`: Name of the .strm file to update (default: `trailer.strm`)
+- `VIDEO_FILENAME`: Name of the .strm file to create (default: `trailer.strm`)
 - `WORKERS`: Number of concurrent workers for parallel processing (default: 4)
-- `VIDEO_START_TIME`: Start time in seconds for the video (default: 10)
-- `TMDB_API_KEY`: Your TMDB API key (required for TMDB-based trailers and language support)
+- `VIDEO_START_TIME`: Start time in seconds for the video (default: 10, skips intros/ads)
+- `SCHEDULE_DAYS`: Interval in days for scheduled scans (default: 7)
+- `TMDB_API_KEY`: Your TMDB API key - **Required for multi-language support**. Get a free key at [https://www.themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
 - `TRAILER_LANGUAGE`: Default language for trailers as ISO 639-1 code (default: `en`)
+
+> **Note:** Without a TMDB API key, Trailerfin will fall back to IMDb scraping which only supports English trailers.
 
 ### 3. Build and Run with Docker
 
@@ -165,6 +177,16 @@ Process only a specific number of folders (useful for testing):
 python trailerfin.py --dir /path/to/your/media --limit 10
 ```
 
+### Force Refresh
+Force download/refresh trailers even if they already exist:
+```sh
+python trailerfin.py --dir /path/to/your/media --force
+```
+Useful when:
+- You want to update all trailers to a different language
+- You want to replace existing trailers with newer versions
+- You've deleted the ignore list and want to retry all folders
+
 ### Continuous Monitoring Mode (Recommended)
 ```sh
 python trailerfin.py --dir /path/to/your/media --monitor
@@ -208,6 +230,7 @@ All available command-line options:
 | `--limit` | Integer | None | Process only N folders (useful for testing) |
 | `--download` | Flag | False | Download trailers as `trailer.mp4` instead of creating `.strm` files |
 | `--language` | String | `en` | Language code (ISO 639-1) for TMDB trailers (e.g., `fr`, `es`, `de`) |
+| `--force` | Flag | False | Force download/refresh even if trailer already exists |
 
 Example with all options:
 ```sh
@@ -219,6 +242,7 @@ python trailerfin.py \
   --download \
   --use-nfo \
   --limit 50 \
+  --force \
   --monitor
 ```
 

@@ -10,13 +10,120 @@ from bs4 import BeautifulSoup
 
 from lib.config import headers, tmdb_api_key, video_start_time
 
+# Global flag to track if TMDB API is available
+_tmdb_api_available = None
+
+
+async def validate_tmdb_api_key() -> bool:
+    """Validate TMDB API key at startup. Returns True if valid, False otherwise."""
+    global _tmdb_api_available
+
+    if not tmdb_api_key:
+        logging.warning(
+            "TMDB_API_KEY not set. Multi-language trailer support disabled. "
+            "Get a free API key at https://www.themoviedb.org/settings/api"
+        )
+        _tmdb_api_available = False
+        return False
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Test the API key with a simple configuration request
+            url = f"https://api.themoviedb.org/3/configuration?api_key={tmdb_api_key}"
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    logging.info(
+                        "TMDB API key validated successfully. Multi-language support enabled."
+                    )
+                    _tmdb_api_available = True
+                    return True
+                elif response.status == 401:
+                    logging.error(
+                        "TMDB API key is invalid (401 Unauthorized). "
+                        "Please check your TMDB_API_KEY in the .env file. "
+                        "Falling back to IMDb scraping (English only)."
+                    )
+                    _tmdb_api_available = False
+                    return False
+                else:
+                    logging.warning(
+                        f"TMDB API returned status {response.status}. "
+                        f"Falling back to IMDb scraping."
+                    )
+                    _tmdb_api_available = False
+                    return False
+    except Exception as e:
+        logging.warning(
+            f"Failed to validate TMDB API key: {e}. Falling back to IMDb scraping."
+        )
+        _tmdb_api_available = False
+        return False
+
+
+async def imdb_to_tmdb(imdb_id: str) -> tuple[str, str] | None:
+    """Convert IMDb ID to TMDB ID using TMDB API. Returns (tmdb_id, media_type)."""
+    global _tmdb_api_available
+
+    # If we already know TMDB API is not available, skip it
+    if _tmdb_api_available is False:
+        return None
+
+    if not tmdb_api_key:
+        if _tmdb_api_available is None:
+            logging.warning(
+                "TMDB_API_KEY not set. Falling back to IMDb scraping (English only)."
+            )
+            _tmdb_api_available = False
+        return None
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Try movie search first
+            url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={tmdb_api_key}&external_source=imdb_id"
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+
+                    # Check for movie results
+                    if data.get("movie_results"):
+                        tmdb_id = str(data["movie_results"][0]["id"])
+                        logging.debug(
+                            f"Found TMDB movie ID {tmdb_id} for IMDb {imdb_id}"
+                        )
+                        return (tmdb_id, "movie")
+
+                    # Check for TV show results
+                    if data.get("tv_results"):
+                        tmdb_id = str(data["tv_results"][0]["id"])
+                        logging.debug(f"Found TMDB TV ID {tmdb_id} for IMDb {imdb_id}")
+                        return (tmdb_id, "tv")
+
+                    logging.warning(f"No TMDB results found for IMDb ID {imdb_id}")
+                else:
+                    logging.debug(
+                        f"TMDB API error {response.status} for IMDb ID {imdb_id}"
+                    )
+    except Exception as e:
+        logging.error(f"Error converting IMDb->TMDB: {e}")
+
+    return None
+
 
 async def tmdb_to_imdb(tmdb_id: str) -> str | None:
     """Convert TMDB ID to IMDB ID using TMDB API. Try both as movie and TV show."""
+    global _tmdb_api_available
+
+    if _tmdb_api_available is False:
+        return None
+
     if not tmdb_api_key:
-        logging.error(
-            "TMDB_API_KEY not set. Please set it in the .env file or as an environment variable."
-        )
+        if _tmdb_api_available is None:
+            logging.warning("TMDB_API_KEY not set.")
+            _tmdb_api_available = False
         return None
     # Try as movie
     url_movie = f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids?api_key={tmdb_api_key}"
@@ -53,8 +160,9 @@ async def get_tmdb_trailer_url(
     tmdb_id: str, media_type: str = "movie", language: str = "en"
 ) -> str | None:
     """Get trailer URL directly from TMDB API with language preference."""
-    if not tmdb_api_key:
-        logging.error("TMDB_API_KEY not set.")
+    global _tmdb_api_available
+
+    if _tmdb_api_available is False:
         return None
 
     try:
@@ -170,8 +278,9 @@ async def get_trailer_video_page_url(imdb_id: str) -> str | None:
 
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            # First try descending order (newest first) for trailers
-            url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
+            # First try ascending order (oldest first) to get original series trailer
+            # For TV shows, this avoids getting season-specific trailers
+            url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
             async with session.get(
                 url, timeout=aiohttp.ClientTimeout(total=20)
             ) as response:
@@ -182,8 +291,8 @@ async def get_trailer_video_page_url(imdb_id: str) -> str | None:
                     if video_page_url:
                         return video_page_url
 
-            # If no trailer found in descending order, try ascending order
-            url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
+            # If no trailer found in ascending order, try descending order
+            url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
             async with session.get(
                 url, timeout=aiohttp.ClientTimeout(total=20)
             ) as response:

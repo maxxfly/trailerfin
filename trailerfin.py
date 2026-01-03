@@ -43,6 +43,11 @@ from lib.scanner import run_continuous_monitor, run_scheduler, scan_and_refresh_
     default="en",
     help="Preferred trailer language (ISO 639-1 code: en, fr, es, etc.). Defaults to 'en'",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force download/refresh even if trailer already exists",
+)
 def main(
     dir: tuple[str, ...],
     schedule: bool,
@@ -52,15 +57,16 @@ def main(
     limit: int | None,
     download: bool,
     language: str,
+    force: bool,
 ) -> None:
     """Scan and refresh IMDb trailers."""
     # Convert tuple to list, use default if empty
     directories = list(dir) if dir else None
 
     if monitor:
-        run_continuous_monitor(directories, workers, use_nfo, download, language)
+        run_continuous_monitor(directories, workers, use_nfo, download, language, force)
     elif schedule:
-        run_scheduler(directories, workers, use_nfo, download, language)
+        run_scheduler(directories, workers, use_nfo, download, language, force)
     else:
         scan_and_refresh_trailers(
             scan_paths=directories,
@@ -69,6 +75,7 @@ def main(
             limit=limit,
             download=download,
             language=language,
+            force=force,
         )
 
 

@@ -15,14 +15,20 @@ from lib.cache import (
     save_expiration_times,
     save_ignored_titles,
 )
-from lib.config import base_path, video_filename
+from lib.config import base_path, tmdb_api_key, video_filename
 from lib.file_manager import (
     create_or_update_strm_file,
     download_trailer,
     format_duration,
     get_expiration_time,
 )
-from lib.imdb_scraper import get_direct_video_url_from_page, get_trailer_video_page_url
+from lib.imdb_scraper import (
+    get_direct_video_url_from_page,
+    get_tmdb_trailer_url,
+    get_trailer_video_page_url,
+    imdb_to_tmdb,
+    validate_tmdb_api_key,
+)
 from lib.nfo_parser import get_imdb_from_nfo
 
 try:
@@ -39,61 +45,81 @@ async def process_imdb_folder(
     download: bool = False,
     language: str = "en",
     show_progress: bool = False,
+    force: bool = False,
 ) -> None:
     """Process a single IMDb folder to refresh its trailer."""
     try:
-        # Check if this title is in the ignore list
-        if imdb_id in ignored_titles:
+        # Check if this title is in the ignore list (skip check if force=True)
+        if not force and imdb_id in ignored_titles:
             if not show_progress:
                 logging.info(f"Skipping ignored title {imdb_id} in {root}")
             return
 
         if download:
-            # In download mode, check if trailer.mp4 already exists
+            # In download mode, check if trailer.mp4 already exists (skip check if force=True)
             trailer_path = os.path.join(root, "trailer.mp4")
-            if os.path.exists(trailer_path):
+            if not force and os.path.exists(trailer_path):
                 if not show_progress:
                     logging.info(f"Trailer already downloaded for {imdb_id} in {root}")
                 return
         else:
-            # In .strm mode, check expiration times
+            # In .strm mode, check expiration times (skip check if force=True)
             backdrops_path = os.path.join(root, "backdrops")
             strm_path = os.path.join(backdrops_path, video_filename)
 
-            # Check if we need to refresh based on expiration time
-            current_time = int(time.time())
-            expiration_time = expiration_times.get(strm_path)
+            if not force:
+                # Check if we need to refresh based on expiration time
+                current_time = int(time.time())
+                expiration_time = expiration_times.get(strm_path)
 
-            if expiration_time and current_time < expiration_time:
-                time_until_expiry = expiration_time - current_time
-                formatted_duration = format_duration(time_until_expiry)
-                if not show_progress:
-                    logging.info(
-                        f"Trailer link still valid for {imdb_id} in {root} (expires in {formatted_duration})"
-                    )
-                return
+                if expiration_time and current_time < expiration_time:
+                    time_until_expiry = expiration_time - current_time
+                    formatted_duration = format_duration(time_until_expiry)
+                    if not show_progress:
+                        logging.info(
+                            f"Trailer link still valid for {imdb_id} in {root} (expires in {formatted_duration})"
+                        )
+                    return
 
         if not show_progress:
             logging.info(f"Refreshing trailer for {imdb_id} in {root}")
-        video_page_url = await get_trailer_video_page_url(imdb_id)
-        if video_page_url:
-            video_url = await get_direct_video_url_from_page(video_page_url)
-            if video_url:
-                if download:
-                    # Download the video file
-                    success = await download_trailer(
-                        root, video_url, show_progress=show_progress
-                    )
-                    if not success:
-                        logging.error(f"Failed to download trailer for {imdb_id}")
-                else:
-                    # Create .strm file
-                    create_or_update_strm_file(root, video_url)
-                    # Update expiration time
-                    new_expiration = get_expiration_time(video_url)
-                    if new_expiration:
-                        expiration_times[strm_path] = new_expiration
-                        save_expiration_times(expiration_times)
+
+        video_url = None
+
+        # Try TMDB API first if language is specified or TMDB key is available
+        if tmdb_api_key:
+            tmdb_result = await imdb_to_tmdb(imdb_id)
+            if tmdb_result:
+                tmdb_id, media_type = tmdb_result
+                video_url = await get_tmdb_trailer_url(tmdb_id, media_type, language)
+                if video_url:
+                    if not show_progress:
+                        logging.info(f"Found trailer via TMDB API ({language})")
+
+        # Fallback to IMDb scraping if TMDB didn't work
+        if not video_url:
+            if not show_progress and language != "en":
+                logging.info(f"TMDB failed, falling back to IMDb (English only)")
+            video_page_url = await get_trailer_video_page_url(imdb_id)
+            if video_page_url:
+                video_url = await get_direct_video_url_from_page(video_page_url)
+
+        if video_url:
+            if download:
+                # Download the video file
+                success = await download_trailer(
+                    root, video_url, show_progress=show_progress
+                )
+                if not success:
+                    logging.error(f"Failed to download trailer for {imdb_id}")
+            else:
+                # Create .strm file
+                create_or_update_strm_file(root, video_url)
+                # Update expiration time
+                new_expiration = get_expiration_time(video_url)
+                if new_expiration:
+                    expiration_times[strm_path] = new_expiration
+                    save_expiration_times(expiration_times)
         else:
             # Add to ignored titles if no trailer found
             ignored_titles[imdb_id] = {
@@ -115,8 +141,12 @@ def scan_and_refresh_trailers(
     limit: int | None = None,
     download: bool = False,
     language: str = "en",
+    force: bool = False,
 ) -> None:
     """Scan all IMDb folders and refresh trailers."""
+    # Validate TMDB API key once at startup
+    asyncio.run(validate_tmdb_api_key())
+
     # Handle multiple paths
     paths_to_scan = scan_paths if scan_paths else ([base_path] if base_path else [])
 
@@ -253,6 +283,7 @@ def scan_and_refresh_trailers(
                     download,
                     language,
                     show_progress=True,
+                    force=force,
                 )
 
         # Create all tasks
@@ -286,6 +317,7 @@ def run_scheduler(
     use_nfo: bool = False,
     download: bool = False,
     language: str = "en",
+    force: bool = False,
 ) -> None:
     """Run scanner on a scheduled basis."""
     if not schedule:
@@ -303,6 +335,7 @@ def run_scheduler(
             use_nfo=use_nfo,
             download=download,
             language=language,
+            force=force,
         )
 
     job()
@@ -369,6 +402,8 @@ def check_expiring_links(
                             ignored_titles,
                             download,
                             language,
+                            show_progress=False,
+                            force=False,
                         )
 
                 tasks = [
@@ -483,6 +518,7 @@ def run_continuous_monitor(
     use_nfo: bool = False,
     download: bool = False,
     language: str = "en",
+    force: bool = False,
 ) -> None:
     """Run continuous monitoring for expiring links and new media."""
     logging.info("Starting continuous monitor for expiring links")
@@ -525,6 +561,8 @@ def run_continuous_monitor(
                                 ignored_titles,
                                 download,
                                 language,
+                                show_progress=False,
+                                force=force,
                             )
                         )
                 last_known_folders = current_folders
