@@ -50,6 +50,7 @@ Built with modern async architecture using `aiohttp` and `asyncio`, Trailerfin o
 - Docker (recommended)
 - IMDb IDs in your media folder structure (e.g., `Movie Name (2023) [imdb-tt1234567]`) or `.nfo` files with IMDb IDs
 - TMDB API key (for multi-language trailer support) - Get one at [https://www.themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
+- `yt-dlp` (automatically installed via requirements.txt) - For downloading YouTube trailers in multiple languages
 - **For `.strm` mode only** (default): Theme videos must be enabled in Jellyfin/Plex (Settings > Display > Libraries per device)
 - **For `--download` mode**: No special configuration needed - trailers are saved as `trailer.mp4` files
     <picture>
@@ -251,8 +252,23 @@ python trailerfin.py \
 ### Download Mode
 By default, Trailerfin creates `.strm` files that contain URLs to IMDb trailers. With the `--download` flag, it will instead download the trailer video and save it as `trailer.mp4` in each movie folder. This is useful for offline access or when you prefer to store trailers locally.
 
+**Technical details:**
+- IMDb trailers (English): Downloaded directly via HTTP
+- YouTube trailers (TMDB multi-language): Downloaded using `yt-dlp`
+- Full multi-language support in download mode
+
+**Automatic fallback:**
+- If a YouTube trailer is unavailable (region-blocked, deleted, etc.), Trailerfin automatically falls back to IMDb (English)
+- This ensures you always get a trailer when available, even if the preferred language version is unavailable
+
 ### Multi-Language Trailers
 Using the `--language` option with a valid ISO 639-1 language code (e.g., `fr`, `es`, `de`), Trailerfin will fetch trailers in the specified language via the TMDB API. This feature requires a valid `TMDB_API_KEY` in your `.env` file.
+
+**Important notes:**
+- The TMDB API key is validated at startup to ensure multi-language support works correctly
+- Without a valid TMDB API key, Trailerfin automatically falls back to IMDb scraping (English only)
+- For TV shows, Trailerfin intelligently filters out season-specific trailers to retrieve the original series trailer
+- Multi-language support works in both `.strm` and `--download` modes (uses `yt-dlp` for YouTube downloads)
 
 Supported language codes include:
 - `en` - English (default)
@@ -265,6 +281,11 @@ Supported language codes include:
 
 ### NFO File Parsing
 With the `--use-nfo` flag, Trailerfin will look for `.nfo` files in each folder and extract the IMDb ID from them. This is particularly useful if you use Kodi or Plex, which store metadata in `.nfo` files. Trailerfin supports both XML-based and plain-text NFO formats.
+
+**TV Show handling:**
+- For TV shows, Trailerfin automatically detects season folders (Season 01, Saison 02, etc.)
+- It searches for the `tvshow.nfo` file in the parent directory (series root)
+- This ensures the trailer is placed at the series level, not in individual season folders
 
 ### Multi-Directory Scanning
 You can specify multiple `--dir` options to scan multiple directories simultaneously. This is ideal if you have separate libraries for movies, TV shows, documentaries, etc. Each directory will be processed in parallel, respecting the worker concurrency limit.

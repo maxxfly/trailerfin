@@ -196,7 +196,41 @@ async def get_tmdb_trailer_url(
                         if v.get("type") == "Trailer" and v.get("site") == "YouTube"
                     ]
 
+                    # For TV shows, filter out season-specific trailers
+                    # Look for trailers with the series name (avoid "Season X" in the name)
+                    if media_type == "tv" and trailers:
+                        # First, try to get trailers without "Season" or "Saison" in the name
+                        series_trailers = [
+                            t
+                            for t in trailers
+                            if not any(
+                                word in t.get("name", "").lower()
+                                for word in ["season", "saison", "temporada"]
+                            )
+                        ]
+                        # If we found series-level trailers, use those
+                        if series_trailers:
+                            trailers = series_trailers
+                            logging.debug(
+                                f"Filtered to {len(trailers)} series-level trailers (removed season-specific)"
+                            )
+
                     if trailers:
+                        # For TV shows, prefer older trailers (original series trailer)
+                        # Sort by published_at if available
+                        if media_type == "tv":
+                            trailers_with_date = [
+                                t for t in trailers if t.get("published_at")
+                            ]
+                            if trailers_with_date:
+                                trailers = sorted(
+                                    trailers_with_date,
+                                    key=lambda x: x.get("published_at", ""),
+                                )
+                                logging.debug(
+                                    f"Sorted {len(trailers)} TV trailers by date (oldest first)"
+                                )
+
                         # Prefer official trailers
                         official = [t for t in trailers if t.get("official", False)]
                         trailer = official[0] if official else trailers[0]

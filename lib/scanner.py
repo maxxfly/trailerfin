@@ -86,7 +86,7 @@ async def process_imdb_folder(
 
         video_url = None
 
-        # Try TMDB API first if language is specified or TMDB key is available
+        # Try TMDB API first for multi-language support (works with yt-dlp for YouTube downloads)
         if tmdb_api_key:
             tmdb_result = await imdb_to_tmdb(imdb_id)
             if tmdb_result:
@@ -110,6 +110,28 @@ async def process_imdb_folder(
                 success = await download_trailer(
                     root, video_url, show_progress=show_progress
                 )
+
+                # If YouTube download failed and we're not already using English/IMDb, try fallback to IMDb
+                if not success and "youtube.com" in video_url and language != "en":
+                    if not show_progress:
+                        logging.warning(
+                            f"YouTube trailer unavailable for {imdb_id}, falling back to IMDb (English)"
+                        )
+                    # Try to get IMDb trailer as fallback
+                    video_page_url = await get_trailer_video_page_url(imdb_id)
+                    if video_page_url:
+                        fallback_url = await get_direct_video_url_from_page(
+                            video_page_url
+                        )
+                        if fallback_url:
+                            success = await download_trailer(
+                                root, fallback_url, show_progress=show_progress
+                            )
+                            if success and not show_progress:
+                                logging.info(
+                                    f"Successfully downloaded English trailer for {imdb_id}"
+                                )
+
                 if not success:
                     logging.error(f"Failed to download trailer for {imdb_id}")
             else:
