@@ -16,6 +16,7 @@ video_filename: str | None = os.getenv("VIDEO_FILENAME")
 schedule_days: int = int(os.getenv("SCHEDULE_DAYS", 1))
 video_start_time: int = int(os.getenv("VIDEO_START_TIME", 10))
 tmdb_api_key: str | None = os.getenv("TMDB_API_KEY")
+trailer_language: str = os.getenv("TRAILER_LANGUAGE", "en")
 
 # HTTP Headers for IMDb requests
 headers: dict[str, str] = {

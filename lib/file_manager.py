@@ -1,11 +1,14 @@
 """File management module for .strm files and URLs."""
 
+import asyncio
 import logging
 import os
 import time
 import urllib.parse
 
-from lib.config import video_filename
+import aiohttp
+
+from lib.config import headers, video_filename
 
 
 def create_or_update_strm_file(folder_path: str, video_url: str) -> None:
@@ -57,3 +60,44 @@ def format_duration(seconds: int) -> str:
     minutes = seconds // 60
     remaining_seconds = seconds % 60
     return f"{minutes}min {remaining_seconds}sec"
+
+
+async def download_trailer(
+    folder_path: str, video_url: str, show_progress: bool = False
+) -> bool:
+    """Download trailer video and save as trailer.mp4 in the folder."""
+    trailer_path = os.path.join(folder_path, "trailer.mp4")
+
+    try:
+        if not show_progress:
+            logging.info(f"Downloading trailer to {trailer_path}")
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                video_url, timeout=aiohttp.ClientTimeout(total=60)
+            ) as response:
+                response.raise_for_status()
+
+                # Get total size for progress logging
+                total_size = int(response.headers.get("content-length", 0))
+                downloaded = 0
+
+                with open(trailer_path, "wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+
+        if not show_progress:
+            if total_size > 0:
+                size_mb = total_size / (1024 * 1024)
+                logging.info(f"Downloaded {size_mb:.2f} MB to {trailer_path}")
+            else:
+                logging.info(f"Downloaded trailer to {trailer_path}")
+
+        return True
+    except Exception as e:
+        logging.error(f"Error downloading trailer to {trailer_path}: {e}")
+        # Clean up partial download
+        if os.path.exists(trailer_path):
+            os.remove(trailer_path)
+        return False

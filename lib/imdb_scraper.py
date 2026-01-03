@@ -1,16 +1,17 @@
 """IMDb scraping module for extracting trailer URLs."""
 
+import asyncio
 import json
 import logging
 from typing import Any
 
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 
 from lib.config import headers, tmdb_api_key, video_start_time
 
 
-def tmdb_to_imdb(tmdb_id: str) -> str | None:
+async def tmdb_to_imdb(tmdb_id: str) -> str | None:
     """Convert TMDB ID to IMDB ID using TMDB API. Try both as movie and TV show."""
     if not tmdb_api_key:
         logging.error(
@@ -20,30 +21,116 @@ def tmdb_to_imdb(tmdb_id: str) -> str | None:
     # Try as movie
     url_movie = f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids?api_key={tmdb_api_key}"
     try:
-        response = requests.get(url_movie, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            imdb_id = data.get("imdb_id")
-            if imdb_id and imdb_id.startswith("tt"):
-                return imdb_id
-        # Try as TV Shows if it fails
-        url_tv = f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids?api_key={tmdb_api_key}"
-        response = requests.get(url_tv, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            imdb_id = data.get("imdb_id")
-            if imdb_id and imdb_id.startswith("tt"):
-                return imdb_id
-        else:
-            logging.error(
-                f"TMDB API error {response.status_code} for TMDB ID {tmdb_id}"
-            )
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url_movie, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    imdb_id = data.get("imdb_id")
+                    if imdb_id and imdb_id.startswith("tt"):
+                        return imdb_id
+            # Try as TV Shows if it fails
+            url_tv = f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids?api_key={tmdb_api_key}"
+            async with session.get(
+                url_tv, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    imdb_id = data.get("imdb_id")
+                    if imdb_id and imdb_id.startswith("tt"):
+                        return imdb_id
+                else:
+                    logging.error(
+                        f"TMDB API error {response.status} for TMDB ID {tmdb_id}"
+                    )
     except Exception as e:
         logging.error(f"Error converting TMDB->IMDB: {e}")
     return None
 
 
-def get_trailer_video_page_url(imdb_id: str) -> str | None:
+async def get_tmdb_trailer_url(
+    tmdb_id: str, media_type: str = "movie", language: str = "en"
+) -> str | None:
+    """Get trailer URL directly from TMDB API with language preference."""
+    if not tmdb_api_key:
+        logging.error("TMDB_API_KEY not set.")
+        return None
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Get videos from TMDB
+            url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/videos?api_key={tmdb_api_key}&language={language}"
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    videos = data.get("results", [])
+
+                    if not videos and language != "en":
+                        # Fallback to English if no videos in requested language
+                        logging.info(
+                            f"No trailers found in '{language}', trying English"
+                        )
+                        url_en = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/videos?api_key={tmdb_api_key}&language=en"
+                        async with session.get(
+                            url_en, timeout=aiohttp.ClientTimeout(total=10)
+                        ) as response_en:
+                            if response_en.status == 200:
+                                data_en = await response_en.json()
+                                videos = data_en.get("results", [])
+
+                    # Filter for trailers only (type="Trailer")
+                    trailers = [
+                        v
+                        for v in videos
+                        if v.get("type") == "Trailer" and v.get("site") == "YouTube"
+                    ]
+
+                    if trailers:
+                        # Prefer official trailers
+                        official = [t for t in trailers if t.get("official", False)]
+                        trailer = official[0] if official else trailers[0]
+
+                        youtube_key = trailer.get("key")
+                        if youtube_key:
+                            # Return YouTube URL
+                            youtube_url = (
+                                f"https://www.youtube.com/watch?v={youtube_key}"
+                            )
+                            logging.info(
+                                f"Found TMDB trailer: {trailer.get('name', 'Trailer')} ({language})"
+                            )
+                            return youtube_url
+
+                    # If no trailers, try clips
+                    clips = [
+                        v
+                        for v in videos
+                        if v.get("type") == "Clip" and v.get("site") == "YouTube"
+                    ]
+                    if clips:
+                        youtube_key = clips[0].get("key")
+                        if youtube_key:
+                            youtube_url = (
+                                f"https://www.youtube.com/watch?v={youtube_key}"
+                            )
+                            logging.info(
+                                f"Found TMDB clip: {clips[0].get('name', 'Clip')} ({language})"
+                            )
+                            return youtube_url
+                else:
+                    logging.error(
+                        f"TMDB API error {response.status} for {media_type} ID {tmdb_id}"
+                    )
+    except Exception as e:
+        logging.error(f"Error fetching TMDB trailer: {e}")
+
+    return None
+
+
+async def get_trailer_video_page_url(imdb_id: str) -> str | None:
     """Get the video page URL for a trailer from IMDb."""
 
     def find_trailer_in_page(soup: BeautifulSoup) -> str | None:
@@ -82,47 +169,62 @@ def get_trailer_video_page_url(imdb_id: str) -> str | None:
         return None
 
     try:
-        # First try descending order (newest first) for trailers
-        url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
-        response = requests.get(url, headers=headers, timeout=20)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            video_page_url = find_trailer_in_page(soup)
-            if video_page_url:
-                return video_page_url
+        async with aiohttp.ClientSession(headers=headers) as session:
+            # First try descending order (newest first) for trailers
+            url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=20)
+            ) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    soup = BeautifulSoup(text, "html.parser")
+                    video_page_url = find_trailer_in_page(soup)
+                    if video_page_url:
+                        return video_page_url
 
-        # If no trailer found in descending order, try ascending order
-        url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
-        response = requests.get(url, headers=headers, timeout=20)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            video_page_url = find_trailer_in_page(soup)
-            if video_page_url:
-                return video_page_url
+            # If no trailer found in descending order, try ascending order
+            url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=20)
+            ) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    soup = BeautifulSoup(text, "html.parser")
+                    video_page_url = find_trailer_in_page(soup)
+                    if video_page_url:
+                        return video_page_url
 
-            # If still no trailer found, look for first video longer than 30 seconds
-            video_links = soup.find_all("a", href=lambda x: x and "/video/vi" in x)
-            logging.debug(f"Found {len(video_links)} video links")
+                    # If still no trailer found, look for first video longer than 30 seconds
+                    video_links = soup.find_all(
+                        "a", href=lambda x: x and "/video/vi" in x
+                    )
+                    logging.debug(f"Found {len(video_links)} video links")
 
-            for link in video_links:
-                # Get the duration from the parent div
-                parent_div = link.find_parent("div", class_="video-item")
-                if parent_div:
-                    duration_text = parent_div.find("span", class_="video-duration")
-                    if duration_text:
-                        duration = duration_text.get_text(strip=True)
-                        logging.debug(f"Found duration: {duration}")
-                        # Parse duration (format: "X min Y sec")
-                        minutes = 0
-                        seconds = 0
-                        if "min" in duration:
-                            minutes = int(duration.split("min")[0].strip())
-                        if "sec" in duration:
-                            seconds = int(duration.split("sec")[0].strip().split()[-1])
-                        total_seconds = minutes * 60 + seconds
-                        if total_seconds > 30:
-                            video_page_url = f"https://www.imdb.com{link['href']}"
-                            return video_page_url
+                    for link in video_links:
+                        # Get the duration from the parent div
+                        parent_div = link.find_parent("div", class_="video-item")
+                        if parent_div:
+                            duration_text = parent_div.find(
+                                "span", class_="video-duration"
+                            )
+                            if duration_text:
+                                duration = duration_text.get_text(strip=True)
+                                logging.debug(f"Found duration: {duration}")
+                                # Parse duration (format: "X min Y sec")
+                                minutes = 0
+                                seconds = 0
+                                if "min" in duration:
+                                    minutes = int(duration.split("min")[0].strip())
+                                if "sec" in duration:
+                                    seconds = int(
+                                        duration.split("sec")[0].strip().split()[-1]
+                                    )
+                                total_seconds = minutes * 60 + seconds
+                                if total_seconds > 30:
+                                    video_page_url = (
+                                        f"https://www.imdb.com{link['href']}"
+                                    )
+                                    return video_page_url
 
         logging.warning(f"No suitable video found for {imdb_id}")
         return None
@@ -131,46 +233,54 @@ def get_trailer_video_page_url(imdb_id: str) -> str | None:
         return None
 
 
-def get_direct_video_url_from_page(video_page_url: str) -> str | None:
+async def get_direct_video_url_from_page(video_page_url: str) -> str | None:
     """Extract direct video URL from IMDb video page."""
     try:
-        response = requests.get(video_page_url, headers=headers, timeout=20)
-        if response.status_code != 200:
-            logging.error(
-                f"Failed to fetch video page: {video_page_url} (status {response.status_code})"
-            )
-            return None
-        soup = BeautifulSoup(response.text, "html.parser")
-        script_tag = soup.find("script", id="__NEXT_DATA__", type="application/json")
-        if not script_tag:
-            logging.error(
-                f"No __NEXT_DATA__ script tag found on page: {video_page_url}"
-            )
-            return None
-        data = json.loads(script_tag.string)
-        playback_urls = data["props"]["pageProps"]["videoPlaybackData"]["video"][
-            "playbackURLs"
-        ]
-        mp4_urls = [
-            item for item in playback_urls if item.get("videoMimeType") == "MP4"
-        ]
-        if mp4_urls:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                video_page_url, timeout=aiohttp.ClientTimeout(total=20)
+            ) as response:
+                if response.status != 200:
+                    logging.error(
+                        f"Failed to fetch video page: {video_page_url} (status {response.status})"
+                    )
+                    return None
+                text = await response.text()
+                soup = BeautifulSoup(text, "html.parser")
+                script_tag = soup.find(
+                    "script", id="__NEXT_DATA__", type="application/json"
+                )
+                if not script_tag:
+                    logging.error(
+                        f"No __NEXT_DATA__ script tag found on page: {video_page_url}"
+                    )
+                    return None
+                data = json.loads(script_tag.string)
+                playback_urls = data["props"]["pageProps"]["videoPlaybackData"][
+                    "video"
+                ]["playbackURLs"]
+                mp4_urls = [
+                    item for item in playback_urls if item.get("videoMimeType") == "MP4"
+                ]
+                if mp4_urls:
 
-            def quality_key(item: dict[str, Any]) -> int:
-                if "1080" in item.get("videoDefinition", ""):
-                    return 3
-                if "720" in item.get("videoDefinition", ""):
-                    return 2
-                if "480" in item.get("videoDefinition", ""):
-                    return 1
-                return 0
+                    def quality_key(item: dict[str, Any]) -> int:
+                        if "1080" in item.get("videoDefinition", ""):
+                            return 3
+                        if "720" in item.get("videoDefinition", ""):
+                            return 2
+                        if "480" in item.get("videoDefinition", ""):
+                            return 1
+                        return 0
 
-            best = sorted(mp4_urls, key=quality_key, reverse=True)[0]
-            return best["url"] + f"#t={video_start_time}"
-        if playback_urls:
-            return playback_urls[0]["url"] + f"#t={video_start_time}"
-        logging.warning(f"No playback URLs found in JSON on page: {video_page_url}")
-        return None
+                    best = sorted(mp4_urls, key=quality_key, reverse=True)[0]
+                    return best["url"] + f"#t={video_start_time}"
+                if playback_urls:
+                    return playback_urls[0]["url"] + f"#t={video_start_time}"
+                logging.warning(
+                    f"No playback URLs found in JSON on page: {video_page_url}"
+                )
+                return None
     except Exception as e:
         logging.error(f"Error parsing playback URLs from JSON: {e}")
         return None

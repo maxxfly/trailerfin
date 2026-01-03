@@ -8,7 +8,10 @@ from lib.scanner import run_continuous_monitor, run_scheduler, scan_and_refresh_
 
 @click.command()
 @click.option(
-    "--dir", type=str, default=None, help="Directory to scan (defaults to /mnt/plex)"
+    "--dir",
+    multiple=True,
+    type=str,
+    help="Directory to scan (can be specified multiple times). Defaults to /mnt/plex if none specified",
 )
 @click.option("--schedule", is_flag=True, help="Run as a weekly scheduled job")
 @click.option(
@@ -18,14 +21,55 @@ from lib.scanner import run_continuous_monitor, run_scheduler, scan_and_refresh_
     help=f"Number of worker threads (default: {default_worker_count})",
 )
 @click.option("--monitor", is_flag=True, help="Run in continuous monitoring mode")
-def main(dir: str, schedule: bool, workers: int, monitor: bool) -> None:
+@click.option(
+    "--use-nfo",
+    is_flag=True,
+    help="Parse .nfo files to find je vIMDb ID instead of using directory names",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Limit the number of items to process (useful for testing)",
+)
+@click.option(
+    "--download",
+    is_flag=True,
+    help="Download trailer as trailer.mp4 instead of creating .strm file",
+)
+@click.option(
+    "--language",
+    type=str,
+    default="en",
+    help="Preferred trailer language (ISO 639-1 code: en, fr, es, etc.). Defaults to 'en'",
+)
+def main(
+    dir: tuple[str, ...],
+    schedule: bool,
+    workers: int,
+    monitor: bool,
+    use_nfo: bool,
+    limit: int | None,
+    download: bool,
+    language: str,
+) -> None:
     """Scan and refresh IMDb trailers."""
+    # Convert tuple to list, use default if empty
+    directories = list(dir) if dir else None
+
     if monitor:
-        run_continuous_monitor(dir, workers)
+        run_continuous_monitor(directories, workers, use_nfo, download, language)
     elif schedule:
-        run_scheduler(dir, workers)
+        run_scheduler(directories, workers, use_nfo, download, language)
     else:
-        scan_and_refresh_trailers(dir, workers)
+        scan_and_refresh_trailers(
+            scan_paths=directories,
+            worker_count=workers,
+            use_nfo=use_nfo,
+            limit=limit,
+            download=download,
+            language=language,
+        )
 
 
 if __name__ == "__main__":
