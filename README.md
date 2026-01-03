@@ -50,7 +50,8 @@ Built with modern async architecture using `aiohttp` and `asyncio`, Trailerfin o
 - Docker (recommended)
 - IMDb IDs in your media folder structure (e.g., `Movie Name (2023) [imdb-tt1234567]`) or `.nfo` files with IMDb IDs
 - TMDB API key (for multi-language trailer support) - Get one at [https://www.themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
-- For Jellyfin/Plex users: Make sure Theme videos are enabled in Settings > Display > Libraries per device
+- **For `.strm` mode only** (default): Theme videos must be enabled in Jellyfin/Plex (Settings > Display > Libraries per device)
+- **For `--download` mode**: No special configuration needed - trailers are saved as `trailer.mp4` files
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/trailerfin.png">
       <img alt="trailerfin" src="assets/trailerfin.png">
